@@ -35,7 +35,7 @@
       scene.background = new THREE.Color(0x101216);
 
       const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.01, 10000);
-      camera.position.set(110, 85, 130);
+      camera.up.set(-1, 0, 0);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       renderer.setSize(innerWidth, innerHeight);
@@ -44,7 +44,12 @@
 
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
-      controls.target.set(0, 40, 0);
+      controls.dampingFactor = 0.08;
+      controls.enableZoom = true;
+      controls.zoomSpeed = 1.5;
+      controls.enablePan = true;
+      controls.panSpeed = 1.1;
+      controls.target.set(0, 0, 0);
 
       scene.add(new THREE.HemisphereLight(0xffffff, 0x233044, 2.5));
       const key = new THREE.DirectionalLight(0xffffff, 2.8);
@@ -59,10 +64,16 @@
         model.position.sub(center);
         scene.add(model);
         controls.target.set(0, 0, 0);
-        const distance = Math.max(size.x, size.y, size.z) * 1.7;
-        camera.position.set(distance, distance * 0.72, distance);
-        camera.near = Math.max(distance / 1000, 0.01);
-        camera.far = distance * 20;
+        const largestGroundDimension = Math.max(size.x, size.z);
+        const tightFitDistance = largestGroundDimension / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+        const defaultDistance = tightFitDistance * 1.3;
+        // The source model's ground is X/Z and its label faces negative Y.
+        // This puts “CLIMBING AREA” upright at the bottom of the initial view.
+        camera.position.set(0, -defaultDistance, 0);
+        controls.minDistance = tightFitDistance * 0.22;
+        controls.maxDistance = tightFitDistance * 10;
+        camera.near = Math.max(defaultDistance / 1000, 0.01);
+        camera.far = defaultDistance * 20;
         camera.updateProjectionMatrix();
         controls.update();
         loading.remove();
