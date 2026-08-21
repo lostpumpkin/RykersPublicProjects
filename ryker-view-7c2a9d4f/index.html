@@ -14,10 +14,19 @@
       #label span { color: #bac3d0; font-size: 13px; }
       #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #101216; font-size: 16px; }
       #loading.error { color: #ffb4ab; }
+      #options { position: fixed; right: 16px; top: 16px; width: min(310px, calc(100vw - 32px)); padding: 12px; border: 1px solid #ffffff24; border-radius: 9px; background: #101216e8; }
+      #options label { display: flex; gap: 9px; align-items: flex-start; padding: 8px 0; cursor: pointer; }
+      #options input { margin-top: 3px; accent-color: #6ee7b7; }
+      #options strong { display: block; font-size: 14px; }
+      #options small { display: block; margin-top: 2px; color: #bac3d0; line-height: 1.35; }
     </style>
   </head>
   <body>
     <div id="label"><strong>Ryker</strong><span>Drag to rotate · Scroll to zoom</span></div>
+    <div id="options">
+      <label><input id="quality-mode" type="checkbox" /><span><strong>Presentation lighting</strong><small>Enhanced reflections, soft shadows and physical-material lighting. This is a ray-traced look, not hardware ray tracing.</small></span></label>
+      <label><input id="nature-mode" type="checkbox" /><span><strong>Natural materials + grass</strong><small>Replaces the original colour palette with custom playground PBR materials and animated grass. Turn it off to restore the original MTL colours.</small></span></label>
+    </div>
     <div id="loading">Loading 3D model…</div>
     <script type="importmap">
       { "imports": {
@@ -29,6 +38,7 @@
       import * as THREE from 'three';
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+      import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
       const loading = document.querySelector('#loading');
       const scene = new THREE.Scene();
@@ -40,6 +50,8 @@
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       renderer.setSize(innerWidth, innerHeight);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1;
       document.body.append(renderer.domElement);
 
       const controls = new OrbitControls(camera, renderer.domElement);
@@ -51,17 +63,119 @@
       controls.panSpeed = 1.1;
       controls.target.set(0, 0, 0);
 
-      scene.add(new THREE.HemisphereLight(0xffffff, 0x233044, 2.5));
+      const hemisphere = new THREE.HemisphereLight(0xffffff, 0x233044, 2.5);
+      scene.add(hemisphere);
       const key = new THREE.DirectionalLight(0xffffff, 2.8);
       key.position.set(100, 180, 120);
       scene.add(key);
+      const fill = new THREE.DirectionalLight(0x9dc6ff, 0.55);
+      fill.position.set(-100, 80, -120);
+      scene.add(fill);
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      let model;
+      let originalMaterials = [];
+      let alternateMaterials = [];
+      let grassGroup;
+      const qualityMode = document.querySelector('#quality-mode');
+      const natureMode = document.querySelector('#nature-mode');
+      const textureLoader = new THREE.TextureLoader();
+
+      function texture(path, repeat = 4) {
+        return new Promise((resolve, reject) => textureLoader.load(path, (value) => {
+          value.colorSpace = path.includes('basecolor') ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+          value.wrapS = value.wrapT = THREE.RepeatWrapping;
+          value.repeat.set(repeat, repeat);
+          resolve(value);
+        }, undefined, reject));
+      }
+
+      async function pbrMaterial(name, options) {
+        const [map, normalMap, roughnessMap] = await Promise.all([
+          texture(`./assets/materials/${name}_basecolor.png`, options.repeat),
+          texture(`./assets/materials/${name}_normal.png`, options.repeat),
+          texture(`./assets/materials/${name}_roughness.png`, options.repeat),
+        ]);
+        return new THREE.MeshPhysicalMaterial({ map, normalMap, roughnessMap, roughness: options.roughness, metalness: options.metalness, envMapIntensity: 0.8, clearcoat: options.clearcoat || 0, clearcoatRoughness: 0.35 });
+      }
+
+      async function buildAlternateMaterials() {
+        if (alternateMaterials.length) return;
+        const [polymer, metal, rubber, timber] = await Promise.all([
+          pbrMaterial('polymer', { repeat: 3, roughness: 0.42, metalness: 0.0, clearcoat: 0.12 }),
+          pbrMaterial('metal', { repeat: 5, roughness: 0.34, metalness: 0.92 }),
+          pbrMaterial('rubber', { repeat: 6, roughness: 0.78, metalness: 0.0 }),
+          pbrMaterial('timber', { repeat: 4, roughness: 0.5, metalness: 0.0 }),
+        ]);
+        const set = [polymer, metal, rubber, timber];
+        alternateMaterials = originalMaterials.map((_, index) => set[index % set.length].clone());
+      }
+
+      function createGrass(bounds) {
+        if (grassGroup) return;
+        grassGroup = new THREE.Group();
+        const groundY = bounds.min.y + 0.05;
+        const bladeGeometry = new THREE.PlaneGeometry(0.55, 3.5, 1, 4);
+        bladeGeometry.translate(0, 1.75, 0);
+        const bladeMaterial = new THREE.MeshStandardMaterial({ color: 0x3f7d35, side: THREE.DoubleSide, roughness: 0.9 });
+        texture('./assets/materials/grass_basecolor.png', 2).then((map) => { bladeMaterial.map = map; bladeMaterial.needsUpdate = true; });
+        bladeMaterial.onBeforeCompile = (shader) => {
+          shader.uniforms.time = { value: 0 };
+          bladeMaterial.userData.shader = shader;
+          shader.vertexShader = 'uniform float time;\n' + shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed.x += sin(time * 1.8 + position.y * 1.4 + instanceMatrix[3].x * 0.17 + instanceMatrix[3].z * 0.11) * position.y * 0.12;');
+        };
+        const blades = new THREE.InstancedMesh(bladeGeometry, bladeMaterial, 1600);
+        const dummy = new THREE.Object3D();
+        for (let i = 0; i < 1600; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const radius = 112 + Math.random() * 55;
+          dummy.position.set(Math.cos(angle) * radius, groundY, Math.sin(angle) * radius);
+          dummy.rotation.y = Math.random() * Math.PI;
+          dummy.scale.setScalar(0.7 + Math.random() * 0.75);
+          dummy.updateMatrix();
+          blades.setMatrixAt(i, dummy.matrix);
+        }
+        blades.castShadow = blades.receiveShadow = true;
+        grassGroup.add(blades);
+        scene.add(grassGroup);
+      }
+
+      function applyQuality() {
+        const enabled = qualityMode.checked;
+        renderer.shadowMap.enabled = enabled;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMappingExposure = enabled ? 1.18 : 1;
+        scene.environment = enabled ? environment : null;
+        key.castShadow = enabled;
+        key.shadow.mapSize.set(enabled ? 2048 : 512, enabled ? 2048 : 512);
+        hemisphere.intensity = enabled ? 1.9 : 2.5;
+        if (model) model.traverse((child) => { if (child.isMesh) { child.castShadow = child.receiveShadow = enabled; } });
+      }
+
+      qualityMode.addEventListener('change', applyQuality);
+      natureMode.addEventListener('change', async () => {
+        if (!model) return;
+        natureMode.disabled = true;
+        try {
+          if (natureMode.checked) {
+            await buildAlternateMaterials();
+            model.traverse((child) => { if (child.isMesh) child.material = alternateMaterials; });
+            createGrass(new THREE.Box3().setFromObject(model));
+          } else {
+            model.traverse((child) => { if (child.isMesh) child.material = originalMaterials; });
+            if (grassGroup) grassGroup.visible = false;
+          }
+          if (grassGroup) grassGroup.visible = natureMode.checked;
+        } finally { natureMode.disabled = false; }
+      });
 
       new GLTFLoader().load('./ryker.glb', (gltf) => {
-        const model = gltf.scene;
+        model = gltf.scene;
         const box = new THREE.Box3().setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
         model.position.sub(center);
+        model.traverse((child) => { if (child.isMesh) originalMaterials = Array.isArray(child.material) ? child.material.slice() : [child.material]; });
         scene.add(model);
         controls.target.set(0, 0, 0);
         const largestGroundDimension = Math.max(size.x, size.z);
@@ -88,7 +202,11 @@
         camera.updateProjectionMatrix();
         renderer.setSize(innerWidth, innerHeight);
       });
-      renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+      renderer.setAnimationLoop((time) => {
+        if (grassGroup) grassGroup.traverse((child) => { if (child.material?.userData?.shader) child.material.userData.shader.uniforms.time.value = time * 0.001; });
+        controls.update();
+        renderer.render(scene, camera);
+      });
     </script>
   </body>
 </html>
