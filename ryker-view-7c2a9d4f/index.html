@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <title>Ryker — 3D Viewer</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; overflow: hidden; background: #101216; color: #f1f5f9; font: 15px system-ui, sans-serif; }
+      canvas { display: block; }
+      #label { position: fixed; top: 16px; left: 16px; padding: 10px 13px; border: 1px solid #ffffff24; border-radius: 9px; background: #101216d9; pointer-events: none; }
+      #label strong { display: block; font-size: 16px; }
+      #label span { color: #bac3d0; font-size: 13px; }
+      #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #101216; font-size: 16px; }
+      #loading.error { color: #ffb4ab; }
+    </style>
+  </head>
+  <body>
+    <div id="label"><strong>Ryker</strong><span>Drag to rotate · Scroll to zoom</span></div>
+    <div id="loading">Loading 3D model…</div>
+    <script type="importmap">
+      { "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"
+      } }
+    </script>
+    <script type="module">
+      import * as THREE from 'three';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+      const loading = document.querySelector('#loading');
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x101216);
+
+      const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.01, 10000);
+      camera.position.set(110, 85, 130);
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      document.body.append(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.target.set(0, 40, 0);
+
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x233044, 2.5));
+      const key = new THREE.DirectionalLight(0xffffff, 2.8);
+      key.position.set(100, 180, 120);
+      scene.add(key);
+
+      new GLTFLoader().load('./ryker.glb', (gltf) => {
+        const model = gltf.scene;
+        const box = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        model.position.sub(center);
+        scene.add(model);
+        controls.target.set(0, 0, 0);
+        const distance = Math.max(size.x, size.y, size.z) * 1.7;
+        camera.position.set(distance, distance * 0.72, distance);
+        camera.near = Math.max(distance / 1000, 0.01);
+        camera.far = distance * 20;
+        camera.updateProjectionMatrix();
+        controls.update();
+        loading.remove();
+      }, undefined, (error) => {
+        console.error(error);
+        loading.textContent = 'The 3D model could not be loaded.';
+        loading.classList.add('error');
+      });
+
+      addEventListener('resize', () => {
+        camera.aspect = innerWidth / innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(innerWidth, innerHeight);
+      });
+      renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+    </script>
+  </body>
+</html>
